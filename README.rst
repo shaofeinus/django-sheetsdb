@@ -88,10 +88,12 @@ Sheetsdb SDK
 
 All database functions can be executed using the `SheetsdbSDK` object.
 
-To access the `SheetsdbSDK` in a view, simply add the `@sheetsdb_sdk_required` decorator to the view function.
+To access the `SheetsdbSDK` in a view, simply add the `@require_sheetsdb_sdk` decorator to the view function.
 The `SheetsdbSDK` can then be accessed from the `sheetsdb_sdk` argument in the view function::
 
-    @sheetsdb_sdk_required
+    from sheetsdb.decorators import require_sheetsdb_sdk
+
+    @require_sheetsdb_sdk
     def my_view(request, sheetsdb_sdk):
         ...
         sheetsdb_sdk.select(...)
