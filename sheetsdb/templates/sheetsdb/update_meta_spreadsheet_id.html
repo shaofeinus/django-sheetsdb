@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Meta spreadsheet not found</title>
+</head>
+<body>
+{% if reason is not None %}
+    <p>
+        {{ reason }}
+    </p>
+{% endif %}
+<p>
+    Please enter the spreadsheet ID of your meta spreadsheet.
+    Your meta spreadsheet should be in the root google drive directory.
+</p>
+<form method="POST"
+      action="{% url 'sheetsdb-update-meta-spreadsheet-id' %}{% if next is not None %}?next={{ next }}{% endif %}">
+    <table>
+        {% csrf_token %}
+        {{ form.as_table }}
+    </table>
+    <button type="submit">Submit</button>
+</form>
+</body>
+</html>

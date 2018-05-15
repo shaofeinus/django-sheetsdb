@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Sheets DB</title>
+</head>
+<body>
+{{ meta_spreadsheet }}
+<h1>Meta information</h1>
+<table>
+    <tr>
+        <td>Meta spreadsheet ID</td>
+        <td>{{ meta_spreadsheet_id }}</td>
+    </tr>
+    <tr>
+        <td>Number of tables</td>
+        <td>{{ num_tables }}</td>
+    </tr>
+</table>
+<h1>Tables information</h1>
+<table>
+    <tr>
+        <th>Name</th>
+        <th>Number of rows</th>
+        <th>Last modified</th>
+        <th>Spreadsheet ID</th>
+    </tr>
+    {% for table in table_list %}
+        <tr>
+            <td>{{ table.name }}</td>
+            <td>{{ table.num_rows }}</td>
+            <td>{{ table.last_modified_datetime }}</td>
+            <td><a href="{{ table.spreadsheet_link }}" target="_blank">{{ table.spreadsheet_id }}</a></td>
+        </tr>
+    {% endfor %}
+</table>
+</body>
+</html>
