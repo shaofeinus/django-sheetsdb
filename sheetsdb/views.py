@@ -16,7 +16,15 @@ logger = logging.getLogger(__name__)
 @login_required
 @require_sheetsdb_sdk
 def index(request, sheetsdb_sdk):
-    return render(request, 'sheetsdb/index.html', {'sheetsdb_sdk': sheetsdb_sdk})
+    meta_spreadsheet_id = sheetsdb_sdk.get_meta_spreadsheet_id()
+    tables = sheetsdb_sdk.get_all_tables_info()
+    for table in tables:
+        table['spreadsheet_link'] = 'https://docs.google.com/spreadsheets/d/{}/'.format(table['spreadsheet_id'])
+    return render(request, 'sheetsdb/index.html', {
+        'meta_spreadsheet_id': meta_spreadsheet_id,
+        'num_tables': len(tables),
+        'tables': tables
+    })
 
 
 @login_required

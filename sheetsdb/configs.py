@@ -20,3 +20,34 @@ META_SPREADSHEET_BODY = {
 
 UPDATE_META_SPREADSHEET_ID_TEMPLATE = getattr(
     settings, 'SHEETSDB_UPDATE_META_SPREADSHEET_ID_TEMPLATE', 'sheetsdb/update_meta_spreadsheet_id.html')
+
+META_SPREADSHEET_COL_DEFS = [
+    {
+        'name': 'database_name',
+        'type': 'string',
+    },
+    {
+        'name': 'table_name',
+        'type': 'string',
+    },
+    {
+        'name': 'spreadsheet_id',
+        'type': 'string',
+    },
+    {
+        'name': 'next_row_index',
+        'type': 'number',
+    },
+    {
+        'name': 'last_modified_datetime',
+        'type': 'datetime',
+    },
+    {
+        'name': 'col_defs',
+        'type': 'json',
+    },
+]
+
+META_DATABASE_NAME = 'sheetsdb'
+
+META_TABLE_NAME = 'meta'

@@ -5,7 +5,6 @@
     <title>Sheets DB</title>
 </head>
 <body>
-{{ sheetsdb_sdk }}
 <h1>Meta information</h1>
 <table>
     <tr>
@@ -20,18 +19,20 @@
 <h1>Tables information</h1>
 <table>
     <tr>
+        <th>Database</th>
         <th>Name</th>
-        <th>Number of rows</th>
-        <th>Last modified</th>
+        <th>Next row index</th>
+        <th>Last modified date time</th>
         <th>Spreadsheet ID</th>
     </tr>
-    {% for table in table_list %}
-        <tr>
-            <td>{{ table.name }}</td>
-            <td>{{ table.num_rows }}</td>
-            <td>{{ table.last_modified_datetime }}</td>
-            <td><a href="{{ table.spreadsheet_link }}" target="_blank">{{ table.spreadsheet_id }}</a></td>
-        </tr>
+    {% for table in tables %}
+    <tr>
+        <td>{{ table.database_name }}</td>
+        <td>{{ table.table_name }}</td>
+        <td>{{ table.next_row_index }}</td>
+        <td>{{ table.last_modified_datetime }}</td>
+        <td><a href="{{ table.spreadsheet_link }}" target="_blank">{{ table.spreadsheet_id }}</a></td>
+    </tr>
     {% endfor %}
 </table>
 </body>
