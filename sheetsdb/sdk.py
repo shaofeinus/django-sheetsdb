@@ -116,11 +116,11 @@ class SheetsdbSDK:
         self._meta_spreadsheet = meta_spreadsheet
         self._tables = dict()
 
-    def _create_table(self, spreadsheet_id, col_defs):
+    def _create_table_from_spreadsheet(self, spreadsheet_id, col_defs):
         """
         Internal function.
 
-        Create a table by reading a spreadsheet.
+        Create a table IN MEMORY by reading an existing spreadsheet. No spreadsheet is created.
 
         :type spreadsheet_id: str
         :param spreadsheet_id: Spreadsheet ID containing table data
@@ -132,7 +132,7 @@ class SheetsdbSDK:
 
         value_range, error_status = google_services.get_columns_values(self._user, spreadsheet_id, 0, len(col_defs) - 1)
         if error_status is None:
-            return Table(spreadsheet_id, value_range, col_defs)
+            return Table(self._user, spreadsheet_id, value_range, col_defs)
         elif error_status == 404:
             raise SheetsdbSDKError('Spreadsheet {} not found'.format(spreadsheet_id),
                                    SheetsdbSDKError.SPREADSHEET_NOT_FOUND, 'get_table_defs')
@@ -161,7 +161,7 @@ class SheetsdbSDK:
             meta_spreadsheet_id = self.get_meta_spreadsheet_id()
             if not hasattr(self._tables, META_DATABASE_NAME):
                 self._tables[META_DATABASE_NAME] = {}
-            self._tables[META_DATABASE_NAME][META_TABLE_NAME] = self._create_table(
+            self._tables[META_DATABASE_NAME][META_TABLE_NAME] = self._create_table_from_spreadsheet(
                 meta_spreadsheet_id, META_SPREADSHEET_COL_DEFS)
 
         return self._tables[META_DATABASE_NAME][META_TABLE_NAME]
@@ -192,7 +192,8 @@ class SheetsdbSDK:
             row = row_based_result[0]
             if not hasattr(self._tables, database_name):
                 self._tables[database_name] = {}
-            self._tables[database_name][table_name] = self._create_table(row['spreadsheet_id'], row['col_defs'])
+            self._tables[database_name][table_name] = self._create_table_from_spreadsheet(
+                row['spreadsheet_id'], row['col_defs'])
 
         return self._tables[database_name][table_name]
 
@@ -252,16 +253,20 @@ class Table:
 
     _logger = logging.getLogger('{}.{}'.format(__name__, __qualname__))
 
-    def __init__(self, spreadsheet_id, value_range, col_defs):
+    def __init__(self, user, spreadsheet_id, value_range, col_defs):
         """
+        :type user: django.contrib.auth.models.User
+        :param user: User of table. Used when committing changes.
         :type spreadsheet_id: str
-        :param spreadsheet_id: Spreadsheet ID of spreadsheet containing table data. Only when committing changes.
+        :param spreadsheet_id: Spreadsheet ID of spreadsheet containing table data. Used when committing changes.
         :type value_range: Google `ValueRange` resource
         :param value_range: Table data
         :type col_defs: list[dict]
         :param col_defs: List of column definitions for table
         """
 
+        if user is None:
+            raise ValueError('spreadsheet_id is None')
         if spreadsheet_id is None:
             raise ValueError('spreadsheet_id is None')
         if value_range is None:
@@ -272,6 +277,7 @@ class Table:
         if not major_dimension == 'ROWS':
             raise ValueError('Wrong major dimension {}. Should be ROWS'.format(major_dimension))
 
+        self.user = user
         self.spreadsheet_id = spreadsheet_id
         self.col_defs = col_defs
         self.col_names = [col_def['name'] for col_def in col_defs]
@@ -386,7 +392,7 @@ class Table:
         self.inserted_rows.append(
             [row_data[col_def['name']] if col_def['name'] in row_data else None for col_def in self.col_defs])
 
-    def commit(self, user):
+    def commit(self):
         """
         Commits any the changes made to Google Sheets. Multiple commits is allowed and results in incremental update.
 
@@ -398,7 +404,7 @@ class Table:
         # Do first as required original row indexes to identify rows to update
         if len(self.updated_row_indexes) > 0:
             update_response, update_error_status = google_services.update_rows(
-                user, self.spreadsheet_id,
+                self.user, self.spreadsheet_id,
                 [
                     {
                         'index': updated_row_index,
@@ -414,7 +420,7 @@ class Table:
         # but comes after update as deleting will change the row indexes
         if len(self.deleted_row_indexes) > 0:
             delete_response, delete_error_status = google_services.delete_rows(
-                user, self.spreadsheet_id, self.deleted_row_indexes)
+                self.user, self.spreadsheet_id, self.deleted_row_indexes)
             if delete_error_status is not None:
                 raise SheetsdbSDKError('Sheets API error {} when deleting deleted rows'.format(delete_error_status),
                                        SheetsdbSDKError.SHEETS_API_ERROR, '{}{}'.format(self.__qualname__, 'commit'))
@@ -422,7 +428,7 @@ class Table:
         # Insert last as it is just an append operation
         if len(self.inserted_rows) > 0:
             insert_response, insert_error_status = google_services.insert_rows(
-                user, self.spreadsheet_id, self.inserted_rows)
+                self.user, self.spreadsheet_id, self.inserted_rows)
             if insert_error_status is not None:
                 raise SheetsdbSDKError('Sheets API error {} when inserted inserted rows'.format(insert_error_status),
                                        SheetsdbSDKError.SHEETS_API_ERROR, '{}{}'.format(self.__qualname__, 'commit'))
