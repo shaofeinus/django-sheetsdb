@@ -9,7 +9,7 @@
 <table>
     <tr>
         <td>Meta spreadsheet ID</td>
-        <td>{{ meta_spreadsheet_id }}</td>
+        <td><a href="{{ meta_spreadsheet_link }}" target="_blank">{{ meta_spreadsheet_id }}</a></td>
     </tr>
     <tr>
         <td>Number of tables</td>
@@ -21,18 +21,25 @@
     <tr>
         <th>Database</th>
         <th>Name</th>
-        <th>Next row index</th>
-        <th>Last modified date time</th>
         <th>Spreadsheet ID</th>
+        <th>Column name</th>
+        <th>Column type</th>
     </tr>
     {% for table in tables %}
-    <tr>
-        <td>{{ table.database_name }}</td>
-        <td>{{ table.table_name }}</td>
-        <td>{{ table.next_row_index }}</td>
-        <td>{{ table.last_modified_datetime }}</td>
-        <td><a href="{{ table.spreadsheet_link }}" target="_blank">{{ table.spreadsheet_id }}</a></td>
-    </tr>
+        <tr>
+            <td>{{ table.database_name }}</td>
+            <td>{{ table.table_name }}</td>
+            <td><a href="{{ table.spreadsheet_link }}" target="_blank">{{ table.spreadsheet_id }}</a></td>
+        </tr>
+        {% for col_def in table.col_defs %}
+            <tr>
+                <td></td>
+                <td></td>
+                <td></td>
+                <td>{{ col_def.name }}</td>
+                <td>{{ col_def.type }}</td>
+            </tr>
+        {% endfor %}
     {% endfor %}
 </table>
 </body>

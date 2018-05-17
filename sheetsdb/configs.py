@@ -35,14 +35,6 @@ META_SPREADSHEET_COL_DEFS = [
         'type': 'string',
     },
     {
-        'name': 'next_row_index',
-        'type': 'number',
-    },
-    {
-        'name': 'last_modified_datetime',
-        'type': 'datetime',
-    },
-    {
         'name': 'col_defs',
         'type': 'json',
     },

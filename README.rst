@@ -91,14 +91,19 @@ All database functions can be executed using the `SheetsdbSDK` object.
 To access the `SheetsdbSDK` in a view, simply add the `@require_sheetsdb_sdk` decorator to the view function.
 The `SheetsdbSDK` can then be accessed from the `sheetsdb_sdk` argument in the view function::
 
+    from django.contrib.auth.decorators import login_required
     from sheetsdb.decorators import require_sheetsdb_sdk
+    ...
 
+    @login_required
     @require_sheetsdb_sdk
     def my_view(request, sheetsdb_sdk):
         ...
         sheetsdb_sdk.select(...)
         ...
 
+Note that the django `@login_required` decorator needs to be placed BEFORE the `@require_sheetsdb_sdk` decorator
+as the `@require_sheetsdb_sdk` require information of the logged in user to create the `SheetsdbSDK` object.
 
 The functions provided by `SheetsdbSDK` are documented below.
 

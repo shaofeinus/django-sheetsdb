@@ -50,6 +50,9 @@ def convert_to_value(raw_value, value_type):
     :return: Converted value
     """
 
+    if raw_value is None:
+        return raw_value
+
     if value_type == 'string':
         return str(raw_value)
     elif value_type == 'number':
@@ -58,7 +61,7 @@ def convert_to_value(raw_value, value_type):
         # Simple string value for datetime for now
         return str(raw_value)
     elif value_type == 'json':
-        return json.load(raw_value)
+        return json.loads(raw_value)
     else:
         logger.warning('Unrecognised value type {} when converting raw value'.format(value_type))
         return raw_value
@@ -72,7 +75,7 @@ class SheetsdbSDKError(Exception):
     # Error codes
     SPREADSHEET_NOT_FOUND = 1
     UNEXPECTED_TABLE_RESULT = 2
-    UNKNOWN_SHEETS_API_ERROR = 3
+    SHEETS_API_ERROR = 3
 
     def __init__(self, message, error_code, source='Unknown'):
         """
@@ -93,6 +96,8 @@ class SheetsdbSDK:
     """
     SDK for all sheetsdb operations.
     """
+
+    _logger = logging.getLogger('{}.{}'.format(__name__, __qualname__))
 
     def __init__(self, user, meta_spreadsheet):
         """
@@ -127,13 +132,13 @@ class SheetsdbSDK:
 
         value_range, error_status = google_services.get_columns_values(self._user, spreadsheet_id, 0, len(col_defs) - 1)
         if error_status is None:
-            return Table(value_range, col_defs)
+            return Table(spreadsheet_id, value_range, col_defs)
         elif error_status == 404:
             raise SheetsdbSDKError('Spreadsheet {} not found'.format(spreadsheet_id),
                                    SheetsdbSDKError.SPREADSHEET_NOT_FOUND, 'get_table_defs')
         else:
             raise SheetsdbSDKError('Sheets API error {}'.format(error_status),
-                                   SheetsdbSDKError.UNKNOWN_SHEETS_API_ERROR, 'get_table_defs')
+                                   SheetsdbSDKError.SHEETS_API_ERROR, 'get_table_defs')
 
     def get_meta_spreadsheet_id(self):
         """
@@ -216,8 +221,15 @@ class SheetsdbSDK:
                     'database_name': ... ,
                     'table_name': ... ,
                     'spreadsheet_id': ... ,
-                    'next_row_index': ... ,
-                    'last_modified_datetime': ... ,
+                    'col_defs':
+                        [
+                            {
+                                'name': ... ,
+                                'type': ... ,
+                            },
+
+                            ...
+                        ],
                 },
 
                 ...
@@ -228,23 +240,30 @@ class SheetsdbSDK:
         """
 
         meta_table = self.get_meta_table()
-        return meta_table.select(
-            ['database_name', 'table_name', 'spreadsheet_id', 'next_row_index', 'last_modified_datetime'])
+        return meta_table.select(['database_name', 'table_name', 'spreadsheet_id', 'col_defs'])
 
 
 class Table:
     """
-    Logical table entity for a database table
+    Logical table entity for a database table.
+    When created, it captures a Google `ValueRange` resource and stores it as the initial state of the table.
+    Provides functions to operate on the table in memory and commit the changes to Google Sheets.
     """
 
-    def __init__(self, value_range, col_defs):
+    _logger = logging.getLogger('{}.{}'.format(__name__, __qualname__))
+
+    def __init__(self, spreadsheet_id, value_range, col_defs):
         """
+        :type spreadsheet_id: str
+        :param spreadsheet_id: Spreadsheet ID of spreadsheet containing table data. Only when committing changes.
         :type value_range: Google `ValueRange` resource
         :param value_range: Table data
         :type col_defs: list[dict]
         :param col_defs: List of column definitions for table
         """
 
+        if spreadsheet_id is None:
+            raise ValueError('spreadsheet_id is None')
         if value_range is None:
             raise ValueError('value_range is None')
         if col_defs is None:
@@ -253,8 +272,19 @@ class Table:
         if not major_dimension == 'ROWS':
             raise ValueError('Wrong major dimension {}. Should be ROWS'.format(major_dimension))
 
+        self.spreadsheet_id = spreadsheet_id
         self.col_defs = col_defs
+        self.col_names = [col_def['name'] for col_def in col_defs]
         self.rows = value_range.get('values', [])
+        self._reset_changes()
+
+    def _reset_changes(self):
+        self.inserted_rows = []
+        self.deleted_row_indexes = set()
+        self.updated_row_indexes = set()
+
+    def _get_effective_rows(self):
+        return [self.rows[i] for i in range(len(self.rows)) if i not in self.deleted_row_indexes] + self.inserted_rows
 
     def num_rows(self):
         """
@@ -262,7 +292,7 @@ class Table:
         :return: Number of rows in table
         """
 
-        return len(self.rows)
+        return len(self._get_effective_rows())
 
     def select(self, col_names, where_conditions=list(), is_row_base=True):
         """
@@ -295,7 +325,7 @@ class Table:
             }
 
         :type col_names: list[str]
-        :param col_names: List of column names to select
+        :param col_names: List of valid column names to select
         :type where_conditions: list[WhereCondition]
         :param where_conditions: List of where conditions for that each row must satisfy query
         :type is_row_base: bool
@@ -305,7 +335,16 @@ class Table:
 
         """
 
-        filtered_rows = [row for row in self.rows
+        if not set(col_names).issubset(self.col_names):
+            raise ValueError('Invalid column name for select query')
+
+        if len(col_names) == 0:
+            self._logger.debug('No column name to select. Return empty result set')
+            return [] if is_row_base else {}
+
+        # Construct effect rows by removing deleted rows and adding inserted rows
+        effective_rows = self._get_effective_rows()
+        filtered_rows = [row for row in effective_rows
                          if all([condition.is_pass(row, self.col_defs) for condition in where_conditions])]
         col_indexes = [get_col_index(col_name, self.col_defs) for col_name in col_names]
         if is_row_base:
@@ -313,17 +352,84 @@ class Table:
             for row in filtered_rows:
                 row_data = {}
                 for i in col_indexes:
-                    row_data[self.col_defs[i]['name']] = get_or_default(row, i)
+                    row_data[self.col_defs[i]['name']] = convert_to_value(
+                        get_or_default(row, i), self.col_defs[i]['type'])
                 result.append(row_data)
         else:
             result = {}
             for i in col_indexes:
                 column_data = []
                 for row in filtered_rows:
-                    column_data.append(get_or_default(row, i))
+                    column_data.append(convert_to_value(
+                        get_or_default(row, i), self.col_defs[i]['type']))
                 result[self.col_defs[i]['name']] = column_data
 
         return result
+
+    def insert(self, row_data):
+        """
+        Insert a row of data. Row data is in the form:
+        {
+            'col_name': value,
+            ...
+        }
+
+        :type row_data: dict
+        :param row_data: A dict where key is a valid column name and value is the value to be inserted for that column.
+            All column names must be valid.
+            Not all column names need to be specified. Not specified columns names are set to None.
+        """
+
+        if not set(row_data.keys()).issubset(self.col_names):
+            raise ValueError('Invalid column name for row to insert')
+
+        self.inserted_rows.append(
+            [row_data[col_def['name']] if col_def['name'] in row_data else None for col_def in self.col_defs])
+
+    def commit(self, user):
+        """
+        Commits any the changes made to Google Sheets. Multiple commits is allowed and results in incremental update.
+
+        :type user: django.contrib.auth.models.User
+        :param user: User of spreadsheet containing table data
+        """
+
+        # Update
+        # Do first as required original row indexes to identify rows to update
+        if len(self.updated_row_indexes) > 0:
+            update_response, update_error_status = google_services.update_rows(
+                user, self.spreadsheet_id,
+                [
+                    {
+                        'index': updated_row_index,
+                        'values': self.rows[updated_row_index],
+                    } for updated_row_index in self.updated_row_indexes
+                ])
+            if update_error_status is not None:
+                raise SheetsdbSDKError('Sheets API error {} when updating updated rows'.format(update_error_status),
+                                       SheetsdbSDKError.SHEETS_API_ERROR, '{}{}'.format(self.__qualname__, 'commit'))
+
+        # Delete
+        # Also require original row indexes to identify rows to update
+        # but comes after update as deleting will change the row indexes
+        if len(self.deleted_row_indexes) > 0:
+            delete_response, delete_error_status = google_services.delete_rows(
+                user, self.spreadsheet_id, self.deleted_row_indexes)
+            if delete_error_status is not None:
+                raise SheetsdbSDKError('Sheets API error {} when deleting deleted rows'.format(delete_error_status),
+                                       SheetsdbSDKError.SHEETS_API_ERROR, '{}{}'.format(self.__qualname__, 'commit'))
+
+        # Insert last as it is just an append operation
+        if len(self.inserted_rows) > 0:
+            insert_response, insert_error_status = google_services.insert_rows(
+                user, self.spreadsheet_id, self.inserted_rows)
+            if insert_error_status is not None:
+                raise SheetsdbSDKError('Sheets API error {} when inserted inserted rows'.format(insert_error_status),
+                                       SheetsdbSDKError.SHEETS_API_ERROR, '{}{}'.format(self.__qualname__, 'commit'))
+
+        # Update rows and reset changes when all Sheets API requests succeed
+        self.rows = self._get_effective_rows()
+        self._reset_changes()
 
 
 class WhereCondition:
@@ -365,11 +471,13 @@ class WhereCondition:
         col_index = get_col_index(self.col_name, col_defs)
         if col_index is None:
             raise ValueError('Column name {} is not in column definitions'.format(self.col_name))
-        value_type = col_defs[col_index]['type']
-        if not self.comparator == '=' and not value_type == 'int':
-            raise ValueError('Illegal comparator {} for value type {}'.format(self.comparator, value_type))
+        col_type = col_defs[col_index]['type']
+        if col_type == 'json':
+            raise ValueError('json column type cannot be used in where condition')
+        if not self.comparator == '=' and not col_type == 'int':
+            raise ValueError('Illegal comparator {} for column type {}'.format(self.comparator, col_type))
 
-        col_value = convert_to_value(row[col_index], value_type)
+        col_value = convert_to_value(row[col_index], col_type)
         if self.comparator == '=':
             return col_value == self.value
         elif self.comparator == '<=':
