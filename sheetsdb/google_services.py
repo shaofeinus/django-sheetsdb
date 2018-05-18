@@ -96,7 +96,7 @@ def create_meta_spreadsheet(user):
 
 def insert_rows(user, spreadsheet_id, rows_data):
     """
-    Insert some rows of values to TOP OF TABLE. Rows to insert are specified by rows data in the form:
+    Append some rows of values to bottom of table. Rows to insert are specified by rows data in the form:
         [
             # Row 1 to insert
 

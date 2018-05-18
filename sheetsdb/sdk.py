@@ -50,8 +50,8 @@ def convert_to_value(raw_value, value_type):
     :return: Converted value
     """
 
-    if raw_value is None:
-        return raw_value
+    if raw_value is None or raw_value == '':
+        return None
 
     if value_type == 'string':
         return str(raw_value)
@@ -281,20 +281,18 @@ class Table:
         self.spreadsheet_id = spreadsheet_id
         self.col_defs = col_defs
         self.col_names = [col_def['name'] for col_def in col_defs]
-        self.original_rows = value_range.get('values', [])
-        self._reset_changes()
-
-    def _reset_changes(self):
+        # Initial rows from spreadsheet
+        self.initial_rows = value_range.get('values', [])
         # Rows that are inserted but not committed
         self.inserted_rows = []
-        # Row indexes in original rows that are deleted but not committed
-        self.deleted_original_row_indexes = set()
-        # Row indexes in original rows that are updated but not committed
-        self.updated_originial_row_indexes = set()
+        # Row indexes in initial rows that are deleted but not committed
+        self.deleted_initial_row_indexes = set()
+        # Row indexes in initial rows that are updated but not committed
+        self.updated_initial_row_indexes = set()
 
     def _get_effective_rows(self):
-        return [self.original_rows[i] for i in range(len(self.original_rows))
-                if i not in self.deleted_original_row_indexes] + self.inserted_rows
+        return [self.initial_rows[i] for i in range(len(self.initial_rows))
+                if i not in self.deleted_initial_row_indexes] + self.inserted_rows
 
     def _is_where_conditions_passed(self, row, where_conditions):
         """
@@ -347,6 +345,8 @@ class Table:
 
                 col_c: [row_1_value, ... row_r_value],
             }
+
+        **Note**: If not no where conditions are specified, all rows will be selected
 
         :type col_names: list[str]
         :param col_names: List of valid column names to select
@@ -412,13 +412,16 @@ class Table:
 
     def update(self, row_data, where_conditions=list()):
         """
-        Update data for some rows that satisfy a list of where conditions. Row data is in the form:
+        Update columns of some rows to the ones specified in row data. The rows must satisfy a list of where conditions.
+        Row data is in the form:
         {
             'col_name': value,
             ...
         }
 
-        Note that more than 1 row can be updated as long as the rows satisfy the where conditions.
+        **Note**: More than 1 row can be updated as long as the rows satisfy the where conditions.
+
+        **Warning**: If no where conditions are specified, ALL rows will be updated.
 
         :type row_data: dict
         :param row_data: A dict where key is a valid column name and value is the value to be updated for that column.
@@ -438,53 +441,75 @@ class Table:
         if not set(row_data.keys()).issubset(self.col_names):
             raise ValueError('Invalid column name for row to update')
 
-        # Update original rows
-        matched_original_row_indexes = [
-            i for i in range(len(self.original_rows))
-            if (self._is_where_conditions_passed(self.original_rows[i], where_conditions)
+        # Update initial rows
+        matched_initial_row_indexes = [
+            i for i in range(len(self.initial_rows))
+            if (self._is_where_conditions_passed(self.initial_rows[i], where_conditions)
                 # Skip if row already deleted
-                and i not in self.deleted_original_row_indexes)
+                and i not in self.deleted_initial_row_indexes)
         ]
-        update_rows(self.original_rows, matched_original_row_indexes, self.col_defs)
-        # Add indexed to updated original row indexes
-        self.updated_originial_row_indexes = self.updated_originial_row_indexes.union(set(matched_original_row_indexes))
+        update_rows(self.initial_rows, matched_initial_row_indexes, self.col_defs)
+        # Add matched indexes to updated initial row indexes
+        self.updated_initial_row_indexes = self.updated_initial_row_indexes.union(set(matched_initial_row_indexes))
 
         # Update inserted rows
         matched_inserted_row_indexes = [
             i for i in range(len(self.inserted_rows))
-            if self._is_where_conditions_passed(self.original_rows[i], where_conditions)
+            if self._is_where_conditions_passed(self.inserted_rows[i], where_conditions)
         ]
         update_rows(self.inserted_rows, matched_inserted_row_indexes, self.col_defs)
+
+    def delete(self, where_conditions=list()):
+        """
+        Delete some rows that satisfy a list of where conditions.
+
+        **Warning**: If no where conditions are specified, ALL rows will be deleted.
+
+        :type where_conditions: list[WhereCondition]
+        :param where_conditions: List of where conditions for query
+        """
+
+        # Delete initial rows
+        matched_initial_row_indexes = [
+            i for i in range(len(self.initial_rows))
+            if (self._is_where_conditions_passed(self.initial_rows[i], where_conditions)
+                # Skip if row already deleted
+                and i not in self.deleted_initial_row_indexes)
+        ]
+        # Add matched indexes to deleted initial row indexes
+        self.deleted_initial_row_indexes = self.deleted_initial_row_indexes.union(set(matched_initial_row_indexes))
+
+        # Delete inserted rows
+        self.inserted_rows = [
+            row for row in self.inserted_rows if not self._is_where_conditions_passed(row, where_conditions)
+        ]
 
     def commit(self):
         """
         Commits any the changes made to Google Sheets. Multiple commits is allowed and results in incremental update.
-
-        :type user: django.contrib.auth.models.User
-        :param user: User of spreadsheet containing table data
         """
 
         # Update
-        # Do first as required original row indexes to identify rows to update
-        if len(self.updated_originial_row_indexes) > 0:
+        # Do first as required initial row indexes to identify rows to update
+        if len(self.updated_initial_row_indexes) > 0:
             update_response, update_error_status = google_services.update_rows(
                 self.user, self.spreadsheet_id,
                 [
                     {
                         'index': updated_row_index,
-                        'values': self.original_rows[updated_row_index],
-                    } for updated_row_index in self.updated_originial_row_indexes
+                        'values': self.initial_rows[updated_row_index],
+                    } for updated_row_index in self.updated_initial_row_indexes
                 ])
             if update_error_status is not None:
                 raise SheetsdbSDKError('Sheets API error {} when updating updated rows'.format(update_error_status),
                                        SheetsdbSDKError.SHEETS_API_ERROR, '{}{}'.format(self.__qualname__, 'commit'))
 
         # Delete
-        # Also require original row indexes to identify rows to update
+        # Also require initial row indexes to identify rows to update
         # but comes after update as deleting will change the row indexes
-        if len(self.deleted_original_row_indexes) > 0:
+        if len(self.deleted_initial_row_indexes) > 0:
             delete_response, delete_error_status = google_services.delete_rows(
-                self.user, self.spreadsheet_id, self.deleted_original_row_indexes)
+                self.user, self.spreadsheet_id, self.deleted_initial_row_indexes)
             if delete_error_status is not None:
                 raise SheetsdbSDKError('Sheets API error {} when deleting deleted rows'.format(delete_error_status),
                                        SheetsdbSDKError.SHEETS_API_ERROR, '{}{}'.format(self.__qualname__, 'commit'))
@@ -498,8 +523,10 @@ class Table:
                                        SheetsdbSDKError.SHEETS_API_ERROR, '{}{}'.format(self.__qualname__, 'commit'))
 
         # Update rows and reset changes when all Sheets API requests succeed
-        self.original_rows = self._get_effective_rows()
-        self._reset_changes()
+        self.initial_rows = self._get_effective_rows()
+        self.inserted_rows = []
+        self.deleted_initial_row_indexes = set()
+        self.updated_initial_row_indexes = set()
 
 
 class WhereCondition:
@@ -547,7 +574,7 @@ class WhereCondition:
         if not self.comparator == '=' and not col_type == 'int':
             raise ValueError('Illegal comparator {} for column type {}'.format(self.comparator, col_type))
 
-        col_value = convert_to_value(row[col_index], col_type)
+        col_value = convert_to_value(row[col_index], col_type) if col_index < len(row) else None
         if self.comparator == '=':
             return col_value == self.value
         elif self.comparator == '<=':
